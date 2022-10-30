@@ -163,7 +163,7 @@ void printSoilHumidityAndSunshine()
   // Calculate sunlight percent: the brightest sun outputs voltage of 4.90 volts so divide output by 4.90 to get percent
   float sunlight_percent = 100 * (sunlight / 4.90);
   
-  // No negative percents and percents below 0
+  // No negative percents or percents below 0
   if (sunlight_percent > 100)
   {
     sunlight_percent = 100;
@@ -173,14 +173,17 @@ void printSoilHumidityAndSunshine()
     sunlight_percent = 0;
   }
 
+  // Decide if the solar cell was in direct sunlight or not: the threshold is 88 percent sunlight
   boolean in_sunlight = false;
   if (sunlight_percent >= 88)
   {
     in_sunlight = true;
   }
 
+  // Calculate soil percentate: the range of voltage is 2.2 volts to about 1 volt, so minus the max and min by 1 and divide by max to get percent
   float soil_percent = 100 - (((soil_humidity - 1) / 1.20) * 100);
-  
+
+  // No negative percents or percents below 0
   if (soil_percent > 100)
   {
     soil_percent = 100;
@@ -190,11 +193,13 @@ void printSoilHumidityAndSunshine()
     soil_percent = 0;
   }
 
-  
+  // Print the soil humidity and sunlight
   udp.printf("Soil Humidity: %g", soil_percent);
   udp.print("%");
   udp.printf("\nSunlight: %.2f", sunlight_percent);
   udp.print("% ");
+  
+  // Print the decision if we were in direct sunlight or not
   if (in_sunlight)
   {
     udp.printf("(Probably in direct sunlight.)\n");
@@ -205,34 +210,28 @@ void printSoilHumidityAndSunshine()
   }
 }
 
-
-
-
-
-// Soil humidity senser ranged from 2.2 volts to 0.9 volts
-
+// Connects to wifi
 void connectToWiFi(const char * ssid, const char * pwd){
   Serial.println("Connecting to WiFi network: " + String(ssid));
-
-  // delete old config
+  // Delete old config
   WiFi.disconnect(true);
-  //register event handler
+  // Register event handler
   WiFi.onEvent(WiFiEvent);
-  
-  //Initiate connection
+  // Initiate connection
   WiFi.begin(ssid, pwd);
 
   Serial.println("Waiting for WIFI connection...");
 }
 
+// The function that is registered when the wifi is connected to.
 void WiFiEvent(WiFiEvent_t event){
     switch(event) {
       case ARDUINO_EVENT_WIFI_STA_GOT_IP:
-          //When connected set 
+          // When connected
           Serial.print("WiFi connected! IP address: ");
           Serial.println(WiFi.localIP());  
-          //initializes the UDP state
-          //This initializes the transfer buffer
+          // Initializes the UDP state
+          // This initializes the transfer buffer
           udp.begin(WiFi.localIP(),udpPort);
           connected = true;
           break;
@@ -244,11 +243,13 @@ void WiFiEvent(WiFiEvent_t event){
     }
 }
 
-// Converts the input value from analogRead() to voltage and multiplies the voltage by 2
+// Converts the input value from analogRead() to voltage and multiplies the voltage by 2 (because all analog inputs had a voltage divider that divided voltage by 2)
 float voltage(int value)
 {
-  // This number comes from 0.0003369552 * 2
+  // This number comes from 0.0003369552 * 2. That number was obtained by taking two points and finding the slope of the line that relates the input value to the voltage
   float voltage = value * 0.00067391038;
+
+  // No negative voltages
   if (voltage < 0)
   {
     voltage = 0;

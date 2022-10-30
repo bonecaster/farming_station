@@ -6,18 +6,6 @@
  *  Version 1.4.4 was used. 
  */
 
-//    struct tm {
-//        int8_t          tm_sec; /**< seconds after the minute - [ 0 to 59 ] */
-//        int8_t          tm_min; /**< minutes after the hour - [ 0 to 59 ] */
-//        int8_t          tm_hour; /**< hours since midnight - [ 0 to 23 ] */
-//        int8_t          tm_mday; /**< day of the month - [ 1 to 31 ] */
-//        int8_t          tm_wday; /**< days since Sunday - [ 0 to 6 ] */
-//        int8_t          tm_mon; /**< months since January - [ 0 to 11 ] */
-//        int16_t         tm_year; /**< years since 1900 */
-//        int16_t         tm_yday; /**< days since January 1 - [ 0 to 365 ] */
-//        int16_t         tm_isdst; /**< Daylight Saving Time flag */
-//    };
-
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
@@ -26,31 +14,36 @@
 #include "time.h"
 #include "sntp.h"
 
+// Type of DHT sensor being used
 #define DHTTYPE DHT11
+
+// Delay between the farming station readings in milliseconds (There is a few seconds of built-in delay required to take readings)
 #define DELAY_MILLIS 0
+
+// Pins
 #define DHTPIN 5
 #define SOILPIN A0
 #define SOLARPIN A1
 #define VCC_SOIL 6
 
-
-unsigned long lastTime;
+// Wifi name and password
 const char * networkName = "MY_SSID";
 const char * networkPswd = "MY_PASSWORD";
 
-// Broadcast address to send the datagram to.
+// IP adress and port of device to message to (192.168.2.255 is the adress to broadcast to all devices)
 const char * udpAddress = "192.168.2.255";
+const int udpPort = 10000;
+boolean connected = false;
+
+// Time servers and time zone
 const char* ntpServer1 = "pool.ntp.org";
 const char* ntpServer2 = "time.nist.gov";
 const char* time_zone = "EST5EDT,M3.2.0,M11.1.0";
 
-const int udpPort = 10000;
-boolean connected = false;
-
-
 DHT_Unified dht(DHTPIN, DHTTYPE);
 WiFiUDP udp;
 
+// This function runs once when the program starts up
 void setup() {
   // Pin setup
   pinMode(DHTPIN, INPUT);
@@ -58,50 +51,119 @@ void setup() {
   pinMode(SOLARPIN, INPUT);
   pinMode(VCC_SOIL, OUTPUT);
     
-  // Serial and sensor setup
+  // Serial, wifi, and sensor setup
   Serial.begin(115200);
   connectToWiFi(networkName, networkPswd);
   dht.begin();
 
   // Time setup
-  //sntp_set_time_sync_notification_cb(timeavailable);
   sntp_servermode_dhcp(1);
   configTzTime(time_zone, ntpServer1, ntpServer2);
 }
 
+// This function runs continually
 void loop() {
+  // Begin the message to send on the wifi
   udp.beginPacket(udpAddress,udpPort);
+
+  // Print sensor readings
   udp.printf("\n----------FARMING STATION UPDATE v1.0----------\n");
   printTime();
   printTempAndHumidity();
   printSoilHumidityAndSunshine();
+
+  // End the message
   udp.endPacket();
 
-  // Delay
+  // Delay (Remember a few seconds of delay is built-in because of required time to take sensor readings)
   delay(DELAY_MILLIS);
 }
 
+// Prints the time
+void printTime()
+{
+  // Sees if time is available, if it is then it gets the time
+  boolean has_time = false;
+  struct tm timeinfo;
+  if (getLocalTime(&timeinfo))
+  {
+    has_time = true;
+  }
+
+  // If the time was available then print it. If not then print "No time stamp."
+  if (has_time)
+  {
+    udp.printf("%i-%i-%i %i:%i:%i\n", timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
+  }
+  else
+  {
+    udp.printf("No time stamp.\n");
+  }
+}
+
+// Prints the ambient temperature and humidity
+void printTempAndHumidity()
+{
+  // Get temperature once
+  sensors_event_t event;
+  dht.temperature().getEvent(&event);
+
+  // If invalid reading then keep trying until there is a valid reading
+  while (isnan(event.temperature))
+  {
+    // One-second delays between sensor readings required
+    delay(1000);
+    dht.temperature().getEvent(&event);
+  }
+  delay(1000);
+
+  // Sensor outputs in Celsius so convert to fahrenheit and print
+  double f = (event.temperature * 1.8) + 32;
+  udp.printf("Ambient Temperature: %g *F\n", f);
+
+  // Get humidity once
+  dht.humidity().getEvent(&event);
+
+  // If invalid reading then keep trying until there is a valid reading
+  while (isnan(event.relative_humidity))
+  {
+    delay(1000);
+    dht.humidity().getEvent(&event);
+  }
+
+  // Print reading
+  udp.printf("Ambient Humidity: %g", event.relative_humidity);
+  udp.print("%");
+  udp.printf("\n");
+}
+
+// Prints the soil humidity and sunlight
 void printSoilHumidityAndSunshine()
 {
+  // shum means soil humidity
   float shum_sum = 0;
   float sun_sum = 0;
-  
+
+  // This digitalWrite powers on the soil sensor because it corrodes slower if you only power it on when you need it
   digitalWrite(VCC_SOIL, HIGH);
+
+  // Take 10 readings and average them for more accuracy
   for (int i = 0; i < 9; i++)
   { 
     shum_sum += voltage(analogRead(SOILPIN));
     sun_sum += voltage(analogRead(SOLARPIN));
-    
+
     delay(100);
   }
   digitalWrite(VCC_SOIL, LOW);
   
-  // Get sensor measurements
-
   float soil_humidity = shum_sum / 10;
   float sunlight = sun_sum / 10;
 
+  // Calculate sunlight percent: the brightest sun outputs voltage of 4.90 volts so divide output by 4.90 to get percent
   float sunlight_percent = 100 * (sunlight / 4.90);
+  
+  // No negative percents and percents below 0
   if (sunlight_percent > 100)
   {
     sunlight_percent = 100;
@@ -143,51 +205,9 @@ void printSoilHumidityAndSunshine()
   }
 }
 
-void printTime()
-{
-  boolean has_time = false;
-  struct tm timeinfo;
-  if (getLocalTime(&timeinfo))
-  {
-    has_time = true;
-  }
 
-  if (has_time)
-  {
-    udp.printf("%i-%i-%i %i:%i:%i\n", timeinfo.tm_mon + 1, timeinfo.tm_mday, timeinfo.tm_year + 1900, timeinfo.tm_hour, timeinfo.tm_min, timeinfo.tm_sec);
-  }
-  else
-  {
-    udp.printf("No time stamp.\n");
-  }
-}
 
-void printTempAndHumidity()
-{
-  sensors_event_t event;
-  dht.temperature().getEvent(&event);
 
-  while (isnan(event.temperature))
-  {
-    delay(1000);
-    dht.temperature().getEvent(&event);
-  }
-  delay(1000);
-
-  double f = (event.temperature * 1.8) + 32;
-  udp.printf("Ambient Temperature: %g *F\n", f);
-  
-  dht.humidity().getEvent(&event);
-  
-  while (isnan(event.relative_humidity))
-  {
-    dht.humidity().getEvent(&event);
-    delay(1000);
-  }
-  udp.printf("Ambient Humidity: %g", event.relative_humidity);
-  udp.print("%");
-  udp.printf("\n");
-}
 
 // Soil humidity senser ranged from 2.2 volts to 0.9 volts
 
